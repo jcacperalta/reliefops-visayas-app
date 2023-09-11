@@ -26,9 +26,9 @@ def plot_gdf_on_basemap(gdf, ax, m, color='C1', markersize=5, zorder=0):
             ax.plot(x, y, color=color, markersize=markersize, marker='o', zorder= zorder)
 
 def plot_baseline_visayas():
-    visayas_area = gpd.read_file('../data/visayas_provinces.geojson')
-    town_centers = gpd.read_file('../data/visayas_town_centers_2016.geojson')
-    food_hubs = gpd.read_file('../data/visayas_food_hubs_2016.geojson')
+    visayas_area = gpd.read_file('data/visayas_provinces.geojson')
+    town_centers = gpd.read_file('data/visayas_town_centers_2016.geojson')
+    food_hubs = gpd.read_file('data/visayas_food_hubs_2016.geojson')
 
     fig = plt.figure(figsize=[8,9])
     ax = fig.add_subplot(111)
