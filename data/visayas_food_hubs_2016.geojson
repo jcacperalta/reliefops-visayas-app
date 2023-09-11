@@ -1,0 +1,10 @@
+{
+"type": "FeatureCollection",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "name": "FO6", "province": "ILOILO", "lon": 122.54789, "lat": 10.698015, "nearest_node": 1767536381 }, "geometry": { "type": "Point", "coordinates": [ 122.54789, 10.698015 ] } },
+{ "type": "Feature", "properties": { "name": "FO7a", "province": "CEBU", "lon": 123.9076181, "lat": 10.3087315, "nearest_node": 666178197 }, "geometry": { "type": "Point", "coordinates": [ 123.9076181, 10.3087315 ] } },
+{ "type": "Feature", "properties": { "name": "FO7b", "province": "NEGROS ORIENTAL", "lon": 123.3005647, "lat": 9.316284483, "nearest_node": 2934978671 }, "geometry": { "type": "Point", "coordinates": [ 123.3005647, 9.316284483 ] } },
+{ "type": "Feature", "properties": { "name": "FO8", "province": "LEYTE", "lon": 125.005341, "lat": 11.25066, "nearest_node": 797492349 }, "geometry": { "type": "Point", "coordinates": [ 125.005341, 11.25066 ] } }
+]
+}
