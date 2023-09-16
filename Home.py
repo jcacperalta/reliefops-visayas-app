@@ -130,10 +130,12 @@ SIMULATION_TYPES = ["No typhoon (baseline)", "With Typhoon"]
 this_simulation = st.selectbox('Select simulation', SIMULATION_TYPES)
 start_run = st.button("Run")
 if start_run:
+    tic=time.time()
     with st.spinner("Run in progress..."):
         if this_simulation == "No typhoon (baseline)":
             fig = plot_baseline_visayas()
             st.pyplot(fig)
-    st.success("Run completed!")
+            toc=time.time()
+    st.success(f"Run completed in {toc-tic:.1f} secs!")
 st.markdown('')
 st.markdown("### Interpret the results")
