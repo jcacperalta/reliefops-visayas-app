@@ -216,6 +216,7 @@ is_valid_hub = False
 
 st.write("Enter new hub coordinates (up to 4 decimal places)")
 st.caption("You may check OpenStreetMap or other mapping services to get accurate coordinates.")
+st.caption("You may also like to try these locations: Catarman (12.4994, 124.6405) or Kalibo (11.6967, 122.3684)")
 with st.form(key='hub_locs'):
     # Create input widgets for latitude and longitude
     new_hub_lat = st.number_input("Enter Latitude:", 8.4, 13.0, new_hub_lat, key='new_hub_lat', format="%.4f",
@@ -248,6 +249,7 @@ if st.session_state["Submit new hub"]:
             st.write(f"Tool initialized!")
         with st.spinner("Run in progress..."):
             fig = plot_routing_visayas((new_hub_lon,new_hub_lat))
+            st.markdown("### Results")
             st.pyplot(fig)
             toc=time.time()
         st.success(f"Routing model run completed in {toc-tic:.1f} secs!")
