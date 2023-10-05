@@ -135,39 +135,39 @@ def routing_visayas(new_hub=None):
     tic=time.time()
     fh = food_hubs['name'].values
     od_matrix = []
-    for i in np.arange(len(fh)): 
-        print(f"Food Hub: {fh[i]}")
-        src_hub = int(food_hubs['nearest_node'].values[i])
-        dest_list = town_centers['nearest_node'].values
-        for src in [src_hub]:
-            t=time.time()
-            print("Calculating dest distances for src="+str(src))
-            for dest in dest_list:
-                ttime=0
-                path=[]
-                try:
-                    # path=nx.shortest_path(Gw, source=src,target=dest,weight='travel_time') 
-                    ttime,path = nx.bidirectional_dijkstra(Gw, source=src,target=dest,weight='travel_time')
-                    # path=nx.astar_path(Gw, source=src,target=dest,weight='travel_time') 
-                    # ttime,path=nx.bidirectional_dijkstra(Gw, source=src,target=dest, weight='travel_time')
-                    # path_edges=pairwise(path)
-                    # for pe in path_edges:
-                    #    ttime=ttime + Gw.get_edge_data(pe[0],pe[1])[0]['travel_time']
-                except:
-                    ttime=-1
-                od_matrix.append([src,dest,fh[i],ttime,path])
+    with st.status("Calculating routes...", expanded=True) as status:
+        for i in np.arange(len(fh)): 
+            src_hub = int(food_hubs['nearest_node'].values[i])
+            dest_list = town_centers['nearest_node'].values
+            for src in [src_hub]:
+                t=time.time()
+                st.write(f"Calculating travel times from hub {fh[i]} (node: {src})...")
+                for dest in dest_list:
+                    ttime=0
+                    path=[]
+                    try:
+                        # path=nx.shortest_path(Gw, source=src,target=dest,weight='travel_time') 
+                        ttime,path = nx.bidirectional_dijkstra(Gw, source=src,target=dest,weight='travel_time')
+                        # path=nx.astar_path(Gw, source=src,target=dest,weight='travel_time') 
+                        # ttime,path=nx.bidirectional_dijkstra(Gw, source=src,target=dest, weight='travel_time')
+                        # path_edges=pairwise(path)
+                        # for pe in path_edges:
+                        #    ttime=ttime + Gw.get_edge_data(pe[0],pe[1])[0]['travel_time']
+                    except:
+                        ttime=-1
+                    od_matrix.append([src,dest,fh[i],ttime,path])
 
-            toc=time.time()
-            print(f"Routing from {fh[i]} done in {toc-t:0.2f} secs")
+                toc=time.time()
+                st.write(f"Routing from hub {fh[i]} done in {toc-t:0.2f} secs!")
 
-    rdf = pd.DataFrame(od_matrix, columns=['src_node','dest_node','food_hub','travel_time','path'])
-    rdf = rdf.merge(town_centers[['nearest_node','PSGC','POP_2015','POP_2020']], left_on='dest_node', right_on='nearest_node').rename(columns={'PSGC':'dest_psgc'})
-    pwrdf = rdf[rdf[['food_hub','dest_psgc']].apply(lambda x: is_match_hub_psgc(x['food_hub'],x['dest_psgc']), axis=1)]
-    pwrdf = pwrdf.sort_values(by=['dest_psgc', 'travel_time'])
-    pwrdf = pwrdf.groupby('dest_psgc').head(1).reset_index(drop=True)
-    pwrdf = pwrdf.rename(columns={'travel_time':'min_travel_time','src_psgc':'food_hub_assigned'})
-    toc=time.time()
-    st.write(f"✅ Routing to all food hubs finished in {toc-tic:.1f} secs! Plotting results...")
+        rdf = pd.DataFrame(od_matrix, columns=['src_node','dest_node','food_hub','travel_time','path'])
+        rdf = rdf.merge(town_centers[['nearest_node','PSGC','POP_2015','POP_2020']], left_on='dest_node', right_on='nearest_node').rename(columns={'PSGC':'dest_psgc'})
+        pwrdf = rdf[rdf[['food_hub','dest_psgc']].apply(lambda x: is_match_hub_psgc(x['food_hub'],x['dest_psgc']), axis=1)]
+        pwrdf = pwrdf.sort_values(by=['dest_psgc', 'travel_time'])
+        pwrdf = pwrdf.groupby('dest_psgc').head(1).reset_index(drop=True)
+        pwrdf = pwrdf.rename(columns={'travel_time':'min_travel_time','src_psgc':'food_hub_assigned'})
+        toc=time.time()
+        status.update(label=f"✅ Routing to all food hubs finished in {toc-tic:.1f} secs!", state="complete", expanded=False)
     return pwrdf
 
 
@@ -252,12 +252,11 @@ if st.session_state["Submit new hub"]:
         with st.spinner("Initializing..."):
             initialize()
             st.write(f"Tool initialized!")
-        with st.spinner("Run in progress..."):
-            fig = plot_routing_visayas((new_hub_lon,new_hub_lat))
-            st.markdown("### Results")
-            st.write('1. Routing map')
-            st.pyplot(fig)
-            toc=time.time()
+        fig = plot_routing_visayas((new_hub_lon,new_hub_lat))
+        st.markdown("### Results")
+        st.write('1. Routing map')
+        st.pyplot(fig)
+        toc=time.time()
         st.success(f"Routing model run completed in {toc-tic:.1f} secs!")
         st.write(f"Please refresh the page if you wish to run the model again.")
 
