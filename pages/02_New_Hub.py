@@ -208,7 +208,7 @@ def plot_routing_visayas(new_hub=None):
 st.title('ReliefOps Visayas Transport Network Efficiency Simulator')
 st.markdown("---")
 st.markdown("### Try the tool")
-st.divider()
+
 # Initialize variables
 new_hub_lat = 8.4
 new_hub_lon = 121.0
