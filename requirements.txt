@@ -8,5 +8,5 @@ basemap-data-hires==1.3.2
 geopandas==0.13.2
 scipy==1.11.1
 seaborn==0.12.2
-streamlit==1.14.0
+streamlit==1.26.0
 simplification==0.6.11
