@@ -15,3 +15,6 @@ st.title('Typhoon Scenario Simulation')
 
 TYPHOON_SELECT = ["Yolanda (Haiyan) 2014", "Odette (Rai) 2021", "Uring (Thelma) 1991"]
 this_typhoon = st.selectbox('Select typhoon', TYPHOON_SELECT)
+
+start_run = st.button("Run routing model", disabled=True)
+st.write(f"(WIP, please stay tuned for updates)")

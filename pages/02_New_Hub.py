@@ -50,11 +50,14 @@ def get_nodes_table(Gw):
     nodes = nodes[['node','lon','lat']]
     return nodes
 
-def hub_inside_area(gdf, lon, lat):
+def hub_inside_area(gdf, lon, lat, return_region=False):
     point = Point(lon, lat)
     for idx, geometry in enumerate(gdf['geometry']):
         if point.within(geometry):
-            return True
+            if return_region:
+                return (True,int(gdf['REG_PSGC'].values[idx])//10000000)
+            else:
+                return True
     return False
 
 def initialize():
@@ -63,8 +66,11 @@ def initialize():
     town_centers = gpd.read_file('data/visayas_town_centers.geojson')
     food_hubs = gpd.read_file('data/visayas_food_hubs_2016.geojson')
 
-    Gw = nx.read_gml("data/visayas_transport_network.gml")
-    Gw = nx.relabel_nodes(Gw, lambda x: int(x))
+    G = nx.read_gml("data/visayas_transport_network.gml")
+    G = nx.relabel_nodes(G, lambda x: int(x))
+    connected_components = list(nx.connected_components(G))
+    Gw =  G.subgraph(max(connected_components, key=len))
+
     nodes = get_nodes_table(Gw)
 
 def haversine(lon1, lat1, lon2, lat2):
@@ -100,17 +106,29 @@ def routing_visayas(new_hub=None):
     if new_hub:
         lon,lat = new_hub
         with st.spinner("Validating food hub..."):
-            is_valid_hub = hub_inside_area(visayas_area, lon, lat)
+            # check if in visayas land
+            is_in_visayas, food_hub_region = hub_inside_area(visayas_area, lon, lat, return_region=True)
+            # check if near network
+            nearest_node, min_distance = find_nearest_node(Gw, lon, lat)
+            is_within_network = min_distance < 1000 # less than 1 km
+            is_valid_hub = is_in_visayas * is_within_network 
+
         if is_valid_hub:
-            new_fh = pd.Series(['FO8a','NEWHUB', lon,lat], index=fd.columns[:4])
-            nearest_node, min_distance = find_nearest_node(Gw, new_fh['lon'], new_fh['lat'])
+            st.write("✅ Hub is valid. Mapping to nearest network node...")
+            new_fh = pd.Series([f'FO{food_hub_region}x','NEWHUB', lon,lat], index=food_hubs.columns[:4])
             new_fh['nearest_node'] =nearest_node
             new_fh['nearest_node_dist']=min_distance
-            food_hub = food_hub.append(new_fh, ignore_index=True)
+            food_hubs = food_hubs.append(new_fh, ignore_index=True)
+            food_hubs['coords'] = food_hubs.apply(lambda x: Point(x['lon'],x['lat']),axis=1)
+            food_hubs = gpd.GeoDataFrame(food_hubs, geometry=food_hubs['coords'], crs=visayas_area.crs)
+            st.write(f"✅ Hub mapped to nearest network node at distance {min_distance:.1f}m away. Running routing calculations...")
         else:
-            st.write("Invalid hub coordinates. Please choose a new hub location. ")
+            st.error("ERROR: Invalid hub coordinates. Please check and choose a new hub location. ")
+            st.session_state["Submit new hub"] = False
+            st.session_state["Run routing model"] = False
+            st.stop()
             return
-
+    tic=time.time()
     fh = food_hubs['name'].values
     od_matrix = []
     for i in np.arange(len(fh)): 
@@ -144,7 +162,8 @@ def routing_visayas(new_hub=None):
     pwrdf = pwrdf.sort_values(by=['dest_psgc', 'travel_time'])
     pwrdf = pwrdf.groupby('dest_psgc').head(1).reset_index(drop=True)
     pwrdf = pwrdf.rename(columns={'travel_time':'min_travel_time','src_psgc':'food_hub_assigned'})
-    
+    toc=time.time()
+    st.write(f"✅ Routing to all food hubs finished in {toc-tic:.1f} secs! Plotting results...")
     return pwrdf
 
 
@@ -152,7 +171,9 @@ def plot_routing_visayas(new_hub=None):
     global Gw, food_hubs, town_centers, nodes, visayas_area
 
     pwrdf = routing_visayas(new_hub)
+    pwrdf.to_csv('routing_results.csv')
     hub_to_color = dict(zip(food_hubs['name'],[f'C{i}' if i not in [1,2] else 'g' for i in food_hubs.index]))
+    print(hub_to_color)
     pwrdf['route_color'] = pwrdf['food_hub'].apply(lambda x: hub_to_color[x])
 
     ################################
@@ -187,33 +208,50 @@ def plot_routing_visayas(new_hub=None):
 st.title('ReliefOps Visayas Transport Network Efficiency Simulator')
 st.markdown("---")
 st.markdown("### Try the tool")
-
-with st.spinner("Initializing..."):
-    initialize()
-
-st.write(f"Tool initialized!")
 st.divider()
 # Initialize variables
 new_hub_lat = 8.4
 new_hub_lon = 121.0
 is_valid_hub = False
 
-st.write("Enter new hub coordinate")
+st.write("Enter new hub coordinates (up to 4 decimal places)")
 st.caption("You may check OpenStreetMap or other mapping services to get accurate coordinates.")
-# Create input widgets for latitude and longitude
-new_hub_lat = st.number_input("Enter Latitude:", 8.4, 13.0, new_hub_lat, key='new_hub_lat',
-                                help="Enter value between 8.4 and 13.0")
-new_hub_lon = st.number_input("Enter Longitude:", 121.0, 126.5, new_hub_lon, key='new_hub_lon',
-                                help="Enter value between 121.0 and 126.5")
+with st.form(key='hub_locs'):
+    # Create input widgets for latitude and longitude
+    new_hub_lat = st.number_input("Enter Latitude:", 8.4, 13.0, new_hub_lat, key='new_hub_lat', format="%.4f",
+                                    help="Enter value between 8.4 and 13.0")
+    new_hub_lon = st.number_input("Enter Longitude:", 121.0, 126.5, new_hub_lon, key='new_hub_lon', format="%.4f",
+                                    help="Enter value between 121.0 and 126.5")
+    submit_hub = st.form_submit_button(label="Submit new hub") 
 
-start_run = st.button("Run routing model")
-if start_run:
-    tic=time.time()
-    with st.spinner("Run in progress..."):
-        fig = plot_routing_visayas()
-        st.pyplot(fig)
-        toc=time.time()
-    st.success(f"Routing model run completed in {toc-tic:.1f} secs!")
+# Initialize button states
+if "Submit new hub" not in st.session_state:
+    st.session_state["Submit new hub"] = False
+if "Run routing model" not in st.session_state:
+    st.session_state["Run routing model"] = False  
+
+if submit_hub:
+    st.session_state["Submit new hub"] = not st.session_state["Submit new hub"] 
+
+if st.session_state["Submit new hub"]:
+    st.write(f"You entered new hub located at coordinate: ({new_hub_lat}, {new_hub_lon})")
+    st.write("Upon verifying that this is your desired new hub location, click the button below to run the model.")
+    start_run = st.button("Run routing model")
+
+    if start_run:
+        st.session_state["Run routing model"] = not st.session_state["Run routing model"] 
+        print(st.session_state["Run routing model"],st.session_state["Submit new hub"])
+    if st.session_state["Submit new hub"] and st.session_state["Run routing model"]:
+        tic=time.time()
+        with st.spinner("Initializing..."):
+            initialize()
+            st.write(f"Tool initialized!")
+        with st.spinner("Run in progress..."):
+            fig = plot_routing_visayas((new_hub_lon,new_hub_lat))
+            st.pyplot(fig)
+            toc=time.time()
+        st.success(f"Routing model run completed in {toc-tic:.1f} secs!")
+        st.write(f"Please refresh the page if you wish to run the model again.")
 
 
 
