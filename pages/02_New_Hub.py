@@ -105,6 +105,8 @@ def routing_visayas(new_hub=None):
     print("\nStarting routing from food hubs...")
     if new_hub:
         lon,lat = new_hub
+        is_in_visayas = None
+        food_hub_region = None
         with st.spinner("Validating food hub..."):
             # check if in visayas land
             is_in_visayas, food_hub_region = hub_inside_area(visayas_area, lon, lat, return_region=True)
@@ -118,9 +120,11 @@ def routing_visayas(new_hub=None):
             new_fh = pd.Series([f'FO{food_hub_region}x','NEWHUB', lon,lat], index=food_hubs.columns[:4])
             new_fh['nearest_node'] =nearest_node
             new_fh['nearest_node_dist']=min_distance
-            food_hubs = pd.concat([food_hubs,new_fh])
+            new_fh = new_fh.to_frame().transpose()
+            food_hubs = pd.concat([food_hubs,new_fh]).reset_index(drop=True)
             food_hubs['coords'] = food_hubs.apply(lambda x: Point(x['lon'],x['lat']),axis=1)
             food_hubs = gpd.GeoDataFrame(food_hubs, geometry=food_hubs['coords'], crs=visayas_area.crs)
+            print(food_hubs)
             st.write(f"✅ Hub mapped to nearest network node at distance {min_distance:.1f}m away. Running routing calculations...")
         else:
             st.error("ERROR: Invalid hub coordinates. Please check and choose a new hub location. ")
@@ -133,9 +137,9 @@ def routing_visayas(new_hub=None):
     od_matrix = []
     for i in np.arange(len(fh)): 
         print(f"Food Hub: {fh[i]}")
-        src_list = food_hubs['nearest_node'].values[i]
+        src_hub = int(food_hubs['nearest_node'].values[i])
         dest_list = town_centers['nearest_node'].values
-        for src in [src_list]:
+        for src in [src_hub]:
             t=time.time()
             print("Calculating dest distances for src="+str(src))
             for dest in dest_list:
@@ -237,7 +241,7 @@ if submit_hub:
 if st.session_state["Submit new hub"]:
     st.write(f"You entered new hub located at coordinate: ({new_hub_lat}, {new_hub_lon})")
     st.write("Upon verifying that this is your desired new hub location, click the button below to run the model.")
-    st.write("Run takes about 5 mins so please be patient!")
+    st.write("Run takes about 10 mins so please be patient!")
     start_run = st.button("Run routing model")
 
     if start_run:
@@ -251,6 +255,7 @@ if st.session_state["Submit new hub"]:
         with st.spinner("Run in progress..."):
             fig = plot_routing_visayas((new_hub_lon,new_hub_lat))
             st.markdown("### Results")
+            st.write('1. Routing map')
             st.pyplot(fig)
             toc=time.time()
         st.success(f"Routing model run completed in {toc-tic:.1f} secs!")
