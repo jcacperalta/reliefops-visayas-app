@@ -11,6 +11,7 @@ from mpl_toolkits.basemap import Basemap
 import time
 import math
 import re
+import ast
 
 st.set_page_config(page_title="New Hub Simulator")
 
@@ -19,6 +20,7 @@ Gw = None
 food_hubs = None
 town_centers = None
 visayas_area = None
+baseline_routing_df = None
 
 def plot_gdf_on_basemap(gdf, ax, m, color='C1', ls='-', markersize=5, zorder=0):
     for geometry in gdf.geometry:
@@ -61,10 +63,13 @@ def hub_inside_area(gdf, lon, lat, return_region=False):
     return False
 
 def initialize():
-    global Gw, food_hubs, town_centers, nodes, visayas_area
+    global Gw, food_hubs, town_centers, nodes, visayas_area, baseline_routing_df
     visayas_area = gpd.read_file('data/visayas_provinces.geojson')
     town_centers = gpd.read_file('data/visayas_town_centers.geojson')
     food_hubs = gpd.read_file('data/visayas_food_hubs_2016.geojson')
+
+    baseline_routing_df = pd.read_csv('data/baseline_travel_time.csv')
+    baseline_routing_df['path'] = baseline_routing_df['path'].apply(lambda x: ast.literal_eval(x))
 
     G = nx.read_gml("data/visayas_transport_network.gml")
     G = nx.relabel_nodes(G, lambda x: int(x))
@@ -101,7 +106,7 @@ def find_nearest_node(graph, lon, lat):
     return nearest_node, min_distance
 
 def routing_visayas(new_hub=None):
-    global Gw, food_hubs, town_centers, nodes, visayas_area
+    global Gw, food_hubs, town_centers, nodes, visayas_area, baseline_routing_df
     print("\nStarting routing from food hubs...")
     if new_hub:
         lon,lat = new_hub
@@ -133,32 +138,33 @@ def routing_visayas(new_hub=None):
             st.stop()
             return
     tic=time.time()
-    fh = food_hubs['name'].values
+    # route only for new hub region
+    fhs = food_hubs[food_hubs['name'].str.contains(str(food_hub_region))]
     od_matrix = []
     with st.status("Calculating routes...", expanded=True) as status:
-        for i in np.arange(len(fh)): 
-            src_hub = int(food_hubs['nearest_node'].values[i])
+        for i in np.arange(len(fhs)): 
+            src = int(fhs['nearest_node'].values[i])
+            src_name = fhs['name'].values[i]
             dest_list = town_centers['nearest_node'].values
-            for src in [src_hub]:
-                t=time.time()
-                st.write(f"Calculating travel times from hub {fh[i]} (node: {src})...")
-                for dest in dest_list:
-                    ttime=0
-                    path=[]
-                    try:
-                        # path=nx.shortest_path(Gw, source=src,target=dest,weight='travel_time') 
-                        ttime,path = nx.bidirectional_dijkstra(Gw, source=src,target=dest,weight='travel_time')
-                        # path=nx.astar_path(Gw, source=src,target=dest,weight='travel_time') 
-                        # ttime,path=nx.bidirectional_dijkstra(Gw, source=src,target=dest, weight='travel_time')
-                        # path_edges=pairwise(path)
-                        # for pe in path_edges:
-                        #    ttime=ttime + Gw.get_edge_data(pe[0],pe[1])[0]['travel_time']
-                    except:
-                        ttime=-1
-                    od_matrix.append([src,dest,fh[i],ttime,path])
+            t=time.time()
+            print(f"Calculating travel times from hub {src_name} (node: {src})...")
+            for dest in dest_list:
+                ttime=0
+                path=[]
+                try:
+                    # path=nx.shortest_path(Gw, source=src,target=dest,weight='travel_time') 
+                    ttime,path = nx.bidirectional_dijkstra(Gw, source=src,target=dest,weight='travel_time')
+                    # path=nx.astar_path(Gw, source=src,target=dest,weight='travel_time') 
+                    # ttime,path=nx.bidirectional_dijkstra(Gw, source=src,target=dest, weight='travel_time')
+                    # path_edges=pairwise(path)
+                    # for pe in path_edges:
+                    #    ttime=ttime + Gw.get_edge_data(pe[0],pe[1])[0]['travel_time']
+                except:
+                    ttime=-1
+                od_matrix.append([src,dest,src_name,ttime,path])
 
-                toc=time.time()
-                st.write(f"Routing from hub {fh[i]} done in {toc-t:0.2f} secs!")
+            toc=time.time()
+            st.write(f"Routing from hub {src_name} done in {toc-t:0.2f} secs!")
 
         rdf = pd.DataFrame(od_matrix, columns=['src_node','dest_node','food_hub','travel_time','path'])
         rdf = rdf.merge(town_centers[['nearest_node','PSGC','POP_2015','POP_2020']], left_on='dest_node', right_on='nearest_node').rename(columns={'PSGC':'dest_psgc'})
@@ -166,7 +172,12 @@ def routing_visayas(new_hub=None):
         pwrdf = pwrdf.sort_values(by=['dest_psgc', 'travel_time'])
         pwrdf = pwrdf.groupby('dest_psgc').head(1).reset_index(drop=True)
         pwrdf = pwrdf.rename(columns={'travel_time':'min_travel_time','src_psgc':'food_hub_assigned'})
+        
+        # merge with baseline
+        pwrdf = pd.concat([pwrdf,baseline_routing_df[~baseline_routing_df['food_hub'].str.contains(str(food_hub_region))]])
         toc=time.time()
+
+
         status.update(label=f"✅ Routing to all food hubs finished in {toc-tic:.1f} secs!", state="complete", expanded=False)
     return pwrdf
 
@@ -176,7 +187,7 @@ def plot_routing_visayas(new_hub=None):
 
     pwrdf = routing_visayas(new_hub)
     pwrdf.to_csv('routing_results.csv')
-    hub_to_color = dict(zip(food_hubs['name'],[f'C{i}' if i not in [1,2] else 'g' for i in food_hubs.index]))
+    hub_to_color = dict(zip(food_hubs['name'],[f'0.5' if 'x' not in fh else 'r' for fh in food_hubs['name'].values]))
     print(hub_to_color)
     pwrdf['route_color'] = pwrdf['food_hub'].apply(lambda x: hub_to_color[x])
 
