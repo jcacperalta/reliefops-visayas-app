@@ -40,7 +40,7 @@ def colorize(val, num_col):
 ########################################################################
 ########################################################################
 ########################################################################
-st.title('ReliefOps Visayas Transport Simulator')
+st.title('ReliefOps Visayas Transport Network Simulator - New Hub')
 st.markdown("---")
 st.write("This tool simulates adding a new food hub in a province and estimates how well it can reduce relief delivery times to all cities and municipalities. ")
 
