@@ -40,11 +40,11 @@ def colorize(val, num_col):
 ########################################################################
 ########################################################################
 ########################################################################
-st.title('ReliefOps Visayas Transport Network Simulator - New Hub')
+st.title('ReliefOps Visayas Transport Network Model - New Hub Simulator')
 st.markdown("---")
 st.write("This tool simulates adding a new food hub in a province and estimates how well it can reduce relief delivery times to all cities and municipalities. ")
 
-st.markdown("""**Technical note**: Note that the relief delivery times mentioned are estimated travel times to the LGUs from the food hub nearest to them. In this idealized simulation:
+st.markdown("""**Technical note**: The relief delivery times mentioned are estimated travel times to the LGUs from the food hub nearest to them. In this idealized simulation:
 - Each LGU has one dedicated delivery vehicle, i.e. the vehicles do not do stopovers in towns they would pass by, but only on its destination.
 - Deliveries to all LGUs start simultaneously from the food hubs
 - All land and sea routes are considered fully passable.
