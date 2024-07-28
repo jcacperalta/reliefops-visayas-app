@@ -2,7 +2,6 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from shapely.geometry import Point
 import time
 import math
 import re
@@ -41,7 +40,7 @@ def colorize(val, num_col):
 ########################################################################
 ########################################################################
 ########################################################################
-st.title('ReliefOps Visayas Network Transport Simulator')
+st.title('ReliefOps Visayas Transport Simulator')
 st.markdown("---")
 st.write("This tool simulates adding a new food hub in a province and estimates how well it can reduce relief delivery times to all cities and municipalities. ")
 
@@ -129,12 +128,9 @@ if st.session_state["municity_picked"]:
         #baseline
         baseline_tmax = baseline_prdf['baseline_travel_time'].max().round(1)
         scenario_tmax = new_prdf['new_travel_time'].max().round(1)
-        efficiency = 100*(baseline_tmax-scenario_tmax)/baseline_tmax
-        st.write(f"With a new food hub in **{municity_name},{province}** , it will now take only **{scenario_tmax} hours** to reach all LGUs, which is **{efficiency:0.1f}%** faster than baseline ({baseline_tmax} hours).")
-        
-        st.write('The table below compares the baseline to the new (2-hub) travel time across all LGU destinations. The topmost rows show the LGUs which would benefit the most from shortened travel times.')
+        reduced_tmax_pct = 100*(baseline_tmax-scenario_tmax)/baseline_tmax
         ############################
-        # Display travel time 
+        # Compute travel time 
         bprdf  = baseline_prdf[['dest_municipality','baseline_travel_time']]
         nprdf  = new_prdf[['dest_municipality','src_municipality','new_travel_time']]
         result_table = bprdf.merge(nprdf, on=['dest_municipality'])
@@ -145,6 +141,19 @@ if st.session_state["municity_picked"]:
         result_table['Saved time'] = result_table['difference'].map(time_to_readable)
         result_table =  result_table.rename(columns={'src_municipality':'Assigned Food Hub',\
                                                     'dest_municipality':'LGU destination'})
+        ###################                                            
+        reduced_tmean_hrs = result_table[result_table['difference']>0]['new_travel_time'].mean().round(1)
+        efficiency_per_dest = result_table[result_table['difference']>0]['difference']/result_table['baseline_travel_time']
+        efficiency = 100*(efficiency_per_dest.mean())
+
+        st.write(f"With a new food hub in **{municity_name},{province}**, travel time is reduced to its assigned LGUs by an average of **{reduced_tmean_hrs} hrs**, which is **{efficiency:0.1f}% of the baseline**. ")
+        if reduced_tmax_pct>1 :
+            st.write(f"Given this setup, it will take only **{scenario_tmax} hrs** to reach all LGUs, which is **{reduced_tmax_pct:0.1f}%** reduction from the baseline ({baseline_tmax} hrs). ")
+        else:
+            st.write(f"Given this setup, it will take **{scenario_tmax} hr** to reach all LGUs, which is the same as the baseline. ")
+
+        st.write('The table below compares the baseline to the new (2-hub) travel time across all LGU destinations. The topmost rows show the LGUs which would benefit the most from shortened travel times.')
+
         #result_table = result_table[['LGU destination','Assigned Food Hub','Baseline travel time','New travel time','Saved time']]                                           
         col = 'difference'
         norm = (result_table[col] - result_table[col].min()) / (result_table[col].max() - result_table[col].min())
@@ -155,9 +164,9 @@ if st.session_state["municity_picked"]:
         styled_result_table = result_table.style.apply(lambda x: styles, subset=['Saved time'], axis=0)
         # Display dataframe
         st.dataframe(styled_result_table, use_container_width=True, column_config={'baseline_travel_time': None, 'new_travel_time': None, 'difference':None})
-        ############################
-        st.write('### Population reached')       
-        st.write(f"With a new food hub in **{municity_name},{province}** , it will now take only **X,Y,Z hours** to reach 50%, 75%, and 95% of the population which is **E%** faster than baseline")
+        # ############################
+        # st.write('### Population reached')       
+        # st.write(f"With a new food hub in **{municity_name},{province}** , it will now take only **X,Y,Z hours** to reach 50%, 75%, and 95% of the population which is **E%** faster than baseline")
         
 # st.write("Enter new hub coordinates (up to 4 decimal places)")
 # st.caption("You may check OpenStreetMap or other mapping services to get accurate coordinates.")
