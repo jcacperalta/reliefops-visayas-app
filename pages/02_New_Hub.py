@@ -1,275 +1,221 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-import networkx as nx
 import matplotlib.pyplot as plt
 from shapely.geometry import Point
-import fiona
-from simplification.cutil import simplify_coords_vw 
-from mpl_toolkits.basemap import Basemap
 import time
 import math
 import re
 import ast
 
 st.set_page_config(page_title="New Hub Simulator")
+town_centers = pd.read_csv("data/visayas_town_centers_2024.csv")
 
-# Global variables
-Gw = None
-food_hubs = None
-town_centers = None
-visayas_area = None
-baseline_routing_df = None
+def get_hub_assignment(routes_df, capital_psgc, new_hub_psgc=None):
+    # Get minimum travel time
+    rdf = routes_df[routes_df['src_psgc'].isin([capital_psgc, new_hub_psgc])]
+    prdf = rdf.loc[rdf.groupby('dest_psgc')['travel_time'].idxmin()]
+    # remove case where 2 hubs are OD
+    if new_hub_psgc:
+        hub_rows = ((prdf['dest_psgc']==capital_psgc)&(prdf['src_psgc']==new_hub_psgc))|\
+                    ((prdf['dest_psgc']==new_hub_psgc)&(prdf['src_psgc']==capital_psgc))
+        prdf = prdf[~hub_rows]
+    prdf['travel_time'] = prdf['travel_time']/3600
+    prdf = prdf.sort_values(by=['src_psgc','travel_time']).reset_index()
+    return prdf
 
-def plot_gdf_on_basemap(gdf, ax, m, color='C1', ls='-', markersize=5, zorder=0):
-    for geometry in gdf.geometry:
-        if geometry.geom_type == 'Polygon':
-            coords = list(zip(*geometry.exterior.xy))
-            x, y = m([lon for lon, lat in coords], [lat for lon, lat in coords])
-            ax.fill(x, y, color='#f5ebce',edgecolor='#999999', ls=ls, linewidth=0.25, zorder= zorder)
-        elif geometry.geom_type == 'MultiPolygon':
-            for polygon in geometry:
-                coords = list(zip(*polygon.exterior.xy))
-                x, y = m([lon for lon, lat in coords], [lat for lon, lat in coords])
-                ax.fill(x, y, color='#f5ebce',edgecolor='#999999', ls=ls, zorder= zorder)
-        else:
-            x, y = m(geometry.x, geometry.y)
-            ax.plot(x, y, color=color, markersize=markersize, marker='o', zorder= zorder)
+def time_to_readable(seconds):
+    seconds = seconds*3600
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    if hours > 0:
+        return f"{hours}h {minutes}mins"
+    else:
+        return f"{minutes} mins"
 
-def plot_food_hubs_on_basemap(gdf, ax, m, colors, markersize=8, zorder=0):
-    for geometry, color in zip(gdf.geometry, colors):
-        x, y = m(geometry.x, geometry.y)
-        ax.plot(x, y, c=color, markersize=markersize, marker='o', zorder=zorder)
-
-def is_match_hub_psgc(hub,psgc):
-    return int(re.search(r'\d+', hub).group())==psgc//10000000
-
-def get_nodes_table(Gw):
-    nodes = pd.DataFrame(Gw.nodes(data=True), columns=['node','data'])
-    nodes['lon'] = nodes['data'].apply(lambda r:r['x'])
-    nodes['lat'] = nodes['data'].apply(lambda r:r['y'])
-    nodes = nodes[['node','lon','lat']]
-    return nodes
-
-def hub_inside_area(gdf, lon, lat, return_region=False):
-    point = Point(lon, lat)
-    for idx, geometry in enumerate(gdf['geometry']):
-        if point.within(geometry):
-            if return_region:
-                return (True,int(gdf['REG_PSGC'].values[idx])//10000000)
-            else:
-                return True
-    return False
-
-def initialize():
-    global Gw, food_hubs, town_centers, nodes, visayas_area, baseline_routing_df
-    visayas_area = gpd.read_file('data/visayas_provinces.geojson')
-    town_centers = gpd.read_file('data/visayas_town_centers.geojson')
-    food_hubs = gpd.read_file('data/visayas_food_hubs_2016.geojson')
-
-    baseline_routing_df = pd.read_csv('data/baseline_travel_time.csv')
-    baseline_routing_df['path'] = baseline_routing_df['path'].apply(lambda x: ast.literal_eval(x))
-
-    G = nx.read_gml("data/visayas_transport_network.gml")
-    G = nx.relabel_nodes(G, lambda x: int(x))
-    connected_components = list(nx.connected_components(G))
-    Gw =  G.subgraph(max(connected_components, key=len))
-
-    nodes = get_nodes_table(Gw)
-
-def haversine(lon1, lat1, lon2, lat2):
-    # Convert degrees to radians
-    lon1, lat1, lon2, lat2 = map(math.radians, [lon1, lat1, lon2, lat2])
-
-    # Haversine formula
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-    distance = 1000* 6371 * c  # Radius of Earth in m
-    return distance
-
-def find_nearest_node(graph, lon, lat):
-    nearest_node = None
-    min_distance = float('inf')
-
-    for node in graph.nodes(data=True):
-        node_lon = node[1]['x']
-        node_lat = node[1]['y']
-        distance = haversine(lon, lat, node_lon, node_lat)
-        
-        if distance < min_distance:
-            min_distance = distance
-            nearest_node = node[0]
-
-    return nearest_node, min_distance
-
-def routing_visayas(new_hub=None):
-    global Gw, food_hubs, town_centers, nodes, visayas_area, baseline_routing_df
-    print("\nStarting routing from food hubs...")
-    if new_hub:
-        lon,lat = new_hub
-        is_in_visayas = None
-        food_hub_region = None
-        with st.spinner("Validating food hub..."):
-            # check if in visayas land
-            is_in_visayas, food_hub_region = hub_inside_area(visayas_area, lon, lat, return_region=True)
-            # check if near network
-            nearest_node, min_distance = find_nearest_node(Gw, lon, lat)
-            is_within_network = min_distance < 1000 # less than 1 km
-            is_valid_hub = is_in_visayas * is_within_network 
-
-        if is_valid_hub:
-            st.write("✅ Hub is valid. Mapping to nearest network node...")
-            new_fh = pd.Series([f'FO{food_hub_region}x','NEWHUB', lon,lat], index=food_hubs.columns[:4])
-            new_fh['nearest_node'] =nearest_node
-            new_fh['nearest_node_dist']=min_distance
-            new_fh = new_fh.to_frame().transpose()
-            food_hubs = pd.concat([food_hubs,new_fh]).reset_index(drop=True)
-            food_hubs['coords'] = food_hubs.apply(lambda x: Point(x['lon'],x['lat']),axis=1)
-            food_hubs = gpd.GeoDataFrame(food_hubs, geometry=food_hubs['coords'], crs=visayas_area.crs)
-            print(food_hubs)
-            st.write(f"✅ Hub mapped to nearest network node at distance {min_distance:.1f}m away. Running routing calculations...")
-        else:
-            st.error("ERROR: Invalid hub coordinates. Please check and choose a new hub location. ")
-            st.session_state["Submit new hub"] = False
-            st.session_state["Run routing model"] = False
-            st.stop()
-            return
-    tic=time.time()
-    # route only for new hub region
-    fhs = food_hubs[food_hubs['name'].str.contains(str(food_hub_region))]
-    od_matrix = []
-    with st.status("Calculating routes...", expanded=True) as status:
-        for i in np.arange(len(fhs)): 
-            src = int(fhs['nearest_node'].values[i])
-            src_name = fhs['name'].values[i]
-            dest_list = town_centers['nearest_node'].values
-            t=time.time()
-            print(f"Calculating travel times from hub {src_name} (node: {src})...")
-            for dest in dest_list:
-                ttime=0
-                path=[]
-                try:
-                    # path=nx.shortest_path(Gw, source=src,target=dest,weight='travel_time') 
-                    ttime,path = nx.bidirectional_dijkstra(Gw, source=src,target=dest,weight='travel_time')
-                    # path=nx.astar_path(Gw, source=src,target=dest,weight='travel_time') 
-                    # ttime,path=nx.bidirectional_dijkstra(Gw, source=src,target=dest, weight='travel_time')
-                    # path_edges=pairwise(path)
-                    # for pe in path_edges:
-                    #    ttime=ttime + Gw.get_edge_data(pe[0],pe[1])[0]['travel_time']
-                except:
-                    ttime=-1
-                od_matrix.append([src,dest,src_name,ttime,path])
-
-            toc=time.time()
-            st.write(f"Routing from hub {src_name} done in {toc-t:0.2f} secs!")
-
-        rdf = pd.DataFrame(od_matrix, columns=['src_node','dest_node','food_hub','travel_time','path'])
-        rdf = rdf.merge(town_centers[['nearest_node','PSGC','POP_2015','POP_2020']], left_on='dest_node', right_on='nearest_node').rename(columns={'PSGC':'dest_psgc'})
-        pwrdf = rdf[rdf[['food_hub','dest_psgc']].apply(lambda x: is_match_hub_psgc(x['food_hub'],x['dest_psgc']), axis=1)]
-        pwrdf = pwrdf.sort_values(by=['dest_psgc', 'travel_time'])
-        pwrdf = pwrdf.groupby('dest_psgc').head(1).reset_index(drop=True)
-        pwrdf = pwrdf.rename(columns={'travel_time':'min_travel_time','src_psgc':'food_hub_assigned'})
-        
-        # merge with baseline
-        pwrdf = pd.concat([pwrdf,baseline_routing_df[~baseline_routing_df['food_hub'].str.contains(str(food_hub_region))]])
-        toc=time.time()
-
-
-        status.update(label=f"✅ Routing to all food hubs finished in {toc-tic:.1f} secs!", state="complete", expanded=False)
-    return pwrdf
-
-
-def plot_routing_visayas(new_hub=None):
-    global Gw, food_hubs, town_centers, nodes, visayas_area
-
-    pwrdf = routing_visayas(new_hub)
-    pwrdf.to_csv('routing_results.csv')
-    hub_to_color = dict(zip(food_hubs['name'],[f'0.5' if 'x' not in fh else 'r' for fh in food_hubs['name'].values]))
-    print(hub_to_color)
-    pwrdf['route_color'] = pwrdf['food_hub'].apply(lambda x: hub_to_color[x])
-
-    ################################
-    fig = plt.figure(figsize=[8,9])
-    ax = fig.add_subplot(111)
-
-    lon=[121.017,126.408]
-    lat=[8.495,13.134]
-    clon=np.mean(lon)
-    clat=np.mean(lat)
-    mymap = Basemap(llcrnrlon=lon[0], llcrnrlat=lat[0],
-                    urcrnrlon=lon[1], urcrnrlat=lat[1],
-                    resolution='h', projection='tmerc', lat_0 = clat, lon_0 = clon )
-    mymap.fillcontinents(color='#f5f5f5', lake_color='#ffffff')
-
-    plot_gdf_on_basemap(visayas_area, ax, mymap, zorder = 1)
-    plot_food_hubs_on_basemap(food_hubs, ax, mymap, colors=list(hub_to_color.values()), markersize=5, zorder = 99)
-    plot_gdf_on_basemap(town_centers, ax, mymap, color='k', markersize=0.35, zorder = 99)
-
-    path_data = pwrdf[pwrdf['min_travel_time']>-1]
-    for fh_color,path in path_data[['route_color','path']].values:
-        path_df = pd.DataFrame(path, columns=['node'])
-        path_df = path_df.merge(nodes, on='node', how='left')
-        simplified_path_coords = simplify_coords_vw(list(zip(path_df['lon'].values,path_df['lat'].values)), 0.0001)
-        x,y = mymap([p[0] for p in simplified_path_coords],[p[1] for p in simplified_path_coords])
-        mymap.plot(x,y,linestyle='-',color=fh_color,lw=0.7, alpha=0.35, zorder=2)
-    return fig
+def colorize(val, num_col):
+    norm = (num_col - num_col.min()) / (num_col.max() - num_col.min())
+    color = plt.cm.YlGn(norm)
+    return [f'background-color: rgba({int(c[0]*255)}, {int(c[1]*255)}, {int(c[2]*255)}, 0.5)' for c in color]
 
 ########################################################################
 ########################################################################
 ########################################################################
-st.title('ReliefOps Visayas Transport Network Efficiency Simulator')
+st.title('ReliefOps Visayas Network Transport Simulator')
 st.markdown("---")
-st.markdown("### Try the tool")
+st.write("This tool simulates adding a new food hub in a province and estimates how well it can reduce relief delivery times to all cities and municipalities. ")
 
-# Initialize variables
-new_hub_lat = 8.4
-new_hub_lon = 121.0
-is_valid_hub = False
+st.markdown("""**Technical note**: Note that the relief delivery times mentioned are estimated travel times to the LGUs from the food hub nearest to them. In this idealized simulation:
+- Each LGU has one dedicated delivery vehicle, i.e. the vehicles do not do stopovers in towns they would pass by, but only on its destination.
+- Deliveries to all LGUs start simultaneously from the food hubs
+- All land and sea routes are considered fully passable.
 
-st.write("Enter new hub coordinates (up to 4 decimal places)")
-st.caption("You may check OpenStreetMap or other mapping services to get accurate coordinates.")
-st.caption("You may also like to try these locations: Catarman (12.4994, 124.6405) or Kalibo (11.6967, 122.3684)")
-with st.form(key='hub_locs'):
-    # Create input widgets for latitude and longitude
-    new_hub_lat = st.number_input("Enter Latitude:", 8.4, 13.0, new_hub_lat, key='new_hub_lat', format="%.4f",
-                                    help="Enter value between 8.4 and 13.0")
-    new_hub_lon = st.number_input("Enter Longitude:", 121.0, 126.5, new_hub_lon, key='new_hub_lon', format="%.4f",
-                                    help="Enter value between 121.0 and 126.5")
-    submit_hub = st.form_submit_button(label="Submit new hub") 
+These assumptions will not hold in real-life scenarios. Still, the maps generated by the simulation can serve to illustrate the potential impact of activating new food hubs to more efficient relief distribution for nearby areas and may be used as a starting point for more detailed projections. """)
+st.markdown("---")
 
-# Initialize button states
-if "Submit new hub" not in st.session_state:
-    st.session_state["Submit new hub"] = False
-if "Run routing model" not in st.session_state:
-    st.session_state["Run routing model"] = False  
+region_lookup = {"6 - WESTERN VISAYAS":'6', "7 - CENTRAL VISAYAS":'7', "8 - EASTERN VISAYAS":'8', "NIR - NEGROS ISLAND REGION":"NIR"}
 
-if submit_hub:
-    st.session_state["Submit new hub"] = not st.session_state["Submit new hub"] 
+# Declare states
+if "region_picked" not in st.session_state:
+    st.session_state["region_picked"] = False
+if "province_picked" not in st.session_state:
+    st.session_state["province_picked"] = False
+if "municity_picked" not in st.session_state:
+    st.session_state["municity_picked"] = False
 
-if st.session_state["Submit new hub"]:
-    st.write(f"You entered new hub located at coordinate: ({new_hub_lat}, {new_hub_lon})")
-    st.write("Upon verifying that this is your desired new hub location, click the button below to run the model.")
-    st.write("Run takes about 10 mins so please be patient!")
-    start_run = st.button("Run routing model")
+def disable():
+    st.session_state["disabled"] = True
+
+region_pick = st.selectbox(
+        label = "Choose region of focus:",
+        options = ("", "6 - WESTERN VISAYAS", "7 - CENTRAL VISAYAS", "8 - EASTERN VISAYAS", "NIR - NEGROS ISLAND REGION"),
+        format_func=lambda x: 'Select an option' if x == '' else x,
+        disabled= st.session_state["region_picked"]
+        )
+
+if region_pick:
+    region = region_lookup[region_pick]
+    st.session_state["region_picked"] = True    
+    
+##################
+if st.session_state["region_picked"]:
+    provinces = [""]+sorted([p for p in town_centers[town_centers['region']==region]['province'].unique()])
+    province = st.selectbox(
+            label = "Choose province of focus:",
+            options = provinces,
+            format_func=lambda x: 'Select an option' if x == '' else x,
+            disabled= st.session_state["province_picked"]
+        )
+    prov_str = province.lower().replace(' ','_')
+    if province:
+        st.session_state["province_picked"] = True
+
+if st.session_state["province_picked"]:
+    capital_name = town_centers[(town_centers['province']==province)&(town_centers['is_capital']=='Y')]['municipality'].values[0]
+    capital_psgc = town_centers[(town_centers['province']==province)&(town_centers['is_capital']=='Y')]['psgc'].values[0]
+    st.write(f'You picked province {province}, where the currently set food hub is located at its capital, {capital_name}.')
+    municities = [""]+sorted([p for p in town_centers[(town_centers['province']==province)]['municipality'].unique()])
+    municities = [m for m in municities if m !=capital_name]
+    municity_name = st.selectbox(
+            label = "Choose city/municipality to serve as NEW food hub:",
+            options = municities,
+            format_func=lambda x: 'Select an option' if x == '' else x,
+            disabled= st.session_state["municity_picked"]
+        )
+    if municity_name:
+        st.session_state["municity_picked"] = True
+
+if st.session_state["municity_picked"]:
+    st.write(f"You chose **{municity_name}, {province}** as the location of the new food hub.")
+    st.write("Upon verifying that this is your desired new hub location, click the button below to run the model. Otherwise, refresh the page to input again to pick a different hub.")
+    start_run = st.button("Run model")
 
     if start_run:
-        st.session_state["Run routing model"] = not st.session_state["Run routing model"] 
-        print(st.session_state["Run routing model"],st.session_state["Submit new hub"])
-    if st.session_state["Submit new hub"] and st.session_state["Run routing model"]:
-        tic=time.time()
-        with st.spinner("Initializing..."):
-            initialize()
-            st.write(f"Tool initialized!")
-        fig = plot_routing_visayas((new_hub_lon,new_hub_lat))
-        st.markdown("### Results")
-        st.write('1. Routing map')
-        st.pyplot(fig)
-        toc=time.time()
-        st.success(f"Routing model run completed in {toc-tic:.1f} secs!")
-        st.write(f"Please refresh the page if you wish to run the model again.")
+        with st.spinner(f"Calculating routes from {capital_name} and {municity_name}..."):
+            new_hub_psgc = town_centers[(town_centers['province']==province)&(town_centers['municipality']==municity_name)]['psgc'].values[0]
+            routes_df = pd.read_csv(f'data/routes/reg{region}_{prov_str}_routes.csv')
+            baseline_prdf = get_hub_assignment(routes_df, capital_psgc).rename(columns = {'travel_time':'baseline_travel_time'})
+            new_prdf = get_hub_assignment(routes_df, capital_psgc, new_hub_psgc).rename(columns = {'travel_time':'new_travel_time'})
+            time.sleep(2)
+
+        st.write('### Food hub assignment')        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(f"results/baseline/region{region}_{prov_str}_baseline.png", caption="Baseline")
+        with col2:
+            st.image(f"results/new_hub/region{region}_{prov_str}_newhub_{new_hub_psgc}.png" , caption=" With new hub")
+
+        st.write('### Travel time') 
+        #baseline
+        baseline_tmax = baseline_prdf['baseline_travel_time'].max().round(1)
+        scenario_tmax = new_prdf['new_travel_time'].max().round(1)
+        efficiency = 100*(baseline_tmax-scenario_tmax)/baseline_tmax
+        st.write(f"With a new food hub in **{municity_name},{province}** , it will now take only **{scenario_tmax} hours** to reach all LGUs, which is **{efficiency:0.1f}%** faster than baseline ({baseline_tmax} hours).")
+        
+        st.write('The table below compares the baseline to the new (2-hub) travel time across all LGU destinations. The topmost rows show the LGUs which would benefit the most from shortened travel times.')
+        ############################
+        # Display travel time 
+        bprdf  = baseline_prdf[['dest_municipality','baseline_travel_time']]
+        nprdf  = new_prdf[['dest_municipality','src_municipality','new_travel_time']]
+        result_table = bprdf.merge(nprdf, on=['dest_municipality'])
+        result_table['difference'] = result_table['baseline_travel_time'] - result_table['new_travel_time']
+        result_table = result_table.sort_values(by=['difference','baseline_travel_time'], ascending=[False,False]).reset_index(drop=True)
+        result_table['Baseline travel time'] = result_table['baseline_travel_time'].map(time_to_readable)
+        result_table['New travel time'] = result_table['new_travel_time'].map(time_to_readable)
+        result_table['Saved time'] = result_table['difference'].map(time_to_readable)
+        result_table =  result_table.rename(columns={'src_municipality':'Assigned Food Hub',\
+                                                    'dest_municipality':'LGU destination'})
+        #result_table = result_table[['LGU destination','Assigned Food Hub','Baseline travel time','New travel time','Saved time']]                                           
+        col = 'difference'
+        norm = (result_table[col] - result_table[col].min()) / (result_table[col].max() - result_table[col].min())
+        # Generate colors and styles
+        colors = plt.cm.Greens(norm * 0.8)
+        styles = [f'background-color: rgba({int(c[0]*255)}, {int(c[1]*255)}, {int(c[2]*255)}, 0.5)' for c in colors]
+        # Apply styles to the DataFrame
+        styled_result_table = result_table.style.apply(lambda x: styles, subset=['Saved time'], axis=0)
+        # Display dataframe
+        st.dataframe(styled_result_table, use_container_width=True, column_config={'baseline_travel_time': None, 'new_travel_time': None, 'difference':None})
+        ############################
+        st.write('### Population reached')       
+        st.write(f"With a new food hub in **{municity_name},{province}** , it will now take only **X,Y,Z hours** to reach 50%, 75%, and 95% of the population which is **E%** faster than baseline")
+        
+# st.write("Enter new hub coordinates (up to 4 decimal places)")
+# st.caption("You may check OpenStreetMap or other mapping services to get accurate coordinates.")
+# st.caption("You may also like to try these locations: Catarman (12.4994, 124.6405) or Kalibo (11.6967, 122.3684)")
+# with st.form(key='hub_locs'):
+#     # Create input widgets for latitude and longitude
+#     new_hub_lat = st.number_input("Enter Latitude:", 8.4, 13.0, new_hub_lat, key='new_hub_lat', format="%.4f",
+#                                     help="Enter value between 8.4 and 13.0")
+#     new_hub_lon = st.number_input("Enter Longitude:", 121.0, 126.5, new_hub_lon, key='new_hub_lon', format="%.4f",
+#                                     help="Enter value between 121.0 and 126.5")
+#     submit_hub = st.form_submit_button(label="Submit new hub") 
+
+# Initialize button states
+# if "Submit new hub" not in st.session_state:
+#     st.session_state["Submit new hub"] = False
+# if "Run routing model" not in st.session_state:
+#     st.session_state["Run routing model"] = False  
+
+# if submit_hub:
+#     st.session_state["Submit new hub"] = not st.session_state["Submit new hub"] 
+
+# if st.session_state["Submit new hub"]:
+#     st.write(f"You entered new hub located at coordinate: ({new_hub_lat}, {new_hub_lon})")
+#     st.write("Upon verifying that this is your desired new hub location, click the button below to run the model.")
+#     st.write("Run takes about 10 mins so please be patient!")
+#     start_run = st.button("Run routing model")
+
+    # if start_run:
+    #     st.session_state["Run routing model"] = not st.session_state["Run routing model"] 
+    #     print(st.session_state["Run routing model"],st.session_state["Submit new hub"])
+    # if st.session_state["Submit new hub"] and st.session_state["Run routing model"]:
+    #     tic=time.time()
+    #     with st.spinner("Initializing..."):
+    #         initialize()
+    #         st.write(f"Tool initialized!")
+    #     routes_fig = plot_routing_visayas((new_hub_lon,new_hub_lat))
+    #     st.markdown("### Results")
+    #     st.write('1. Routing map')
+    #     st.pyplot(routes_fig)
+    #     toc=time.time()
+    #     st.success(f"Routing model run completed in {toc-tic:.1f} secs!")
+    #     st.write(f"Please refresh the page if you wish to run the model again.")
+# 
+
+# 1) user selects region (6,7,or 8) via drop-down menu
+
+# 2) display (baseline) relief delivery time map of region with location(s) of DSWD food hub — this can be preloaded* 
+
+# 3) display text: With [X] DSWD food hub(s) as suppliers of relief goods, it will take up to [Y] hours to reach all town centers in Region [Z] and [A,B,C] hours to reach 50%, 75%, and 95% of the region’s population (these values are also preloaded) 
+
+# 3) user selects location where to place a new active food hub via drop-down menu for province, city/municipality — we place the food hub in the town center** 
+
+# 4) display updated relief delivery time map with location of additional food hub 
+
+# 5) display text: With an additional active food hub in [city/municipality, province], it will now take only [Y] hours to reach all town centers in Region [Z] and [A,B,C] hours to reach 50%, 75%, and 95% of the region’s population. 
+
+# Let us also add a technical note— draft:
+
 
 
 
